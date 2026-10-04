@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="description" content="CÓNDOR Flight Simulator — browser flight simulator with Central Chile, six-degree-of-freedom physics, interactive cockpits, ATC, weather and missions.">
+  <meta name="theme-color" content="#0c1118">
+  <title>CÓNDOR Flight Simulator</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230c1118'/%3E%3Cpath d='M4 19l12-9 12 9-4 1-8-5-8 5z' fill='%23e8a33c'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/menu.css">
+  <link rel="stylesheet" href="css/flight.css">
+  <link rel="stylesheet" href="css/cockpit.css">
+</head>
+<body>
+  <div id="app">
+    <div id="viewport" aria-label="Flight view"></div>
+    <div id="flight-ui"></div>
+    <div id="menu-root"></div>
+    <div id="boot" role="status">
+      <div class="boot-inner">
+        <div class="boot-brand"><span class="brand-mark"></span><span class="brand-name">CÓNDOR</span></div>
+        <div class="boot-sub">FLIGHT SIMULATOR</div>
+        <div class="boot-bar"><span></span></div>
+        <div id="boot-status" class="mono">Starting…</div>
+      </div>
+      <noscript><p class="boot-noscript">JavaScript is required to run the simulator.</p></noscript>
+    </div>
+    <div id="error-overlay"></div>
+  </div>
+
+  <!-- Core -->
+  <script src="js/core/namespace.js"></script>
+  <script src="js/core/math.js"></script>
+  <script src="js/core/events.js"></script>
+  <script src="js/core/storage.js"></script>
+  <script src="js/input/bindings.js"></script>
+  <script src="js/core/settings.js"></script>
+  <script src="js/core/errors.js"></script>
+  <script src="js/core/loader.js"></script>
+  <!-- Aircraft -->
+  <script src="js/aircraft/aircraftData.js"></script>
+  <script src="js/aircraft/engine.js"></script>
+  <script src="js/aircraft/systems.js"></script>
+  <script src="js/aircraft/failures.js"></script>
+  <script src="js/aircraft/flightModel.js"></script>
+  <script src="js/aircraft/autopilot.js"></script>
+  <script src="js/aircraft/aircraft.js"></script>
+  <script src="js/aircraft/aircraftModel.js"></script>
+  <!-- World -->
+  <script src="js/world/geo.js"></script>
+  <script src="js/world/regions.js"></script>
+  <script src="js/world/airports.js"></script>
+  <script src="js/world/terrain.js"></script>
+  <script src="js/world/weather.js"></script>
+  <script src="js/world/textures.js"></script>
+  <script src="js/world/renderUtils.js"></script>
+  <script src="js/world/terrainRenderer.js"></script>
+  <script src="js/world/airportRenderer.js"></script>
+  <script src="js/world/scenery.js"></script>
+  <script src="js/world/sky.js"></script>
+  <script src="js/world/clouds.js"></script>
+  <script src="js/world/effects.js"></script>
+  <script src="js/world/traffic.js"></script>
+  <script src="js/world/world.js"></script>
+  <!-- Navigation -->
+  <script src="js/navigation/navdata.js"></script>
+  <script src="js/navigation/radios.js"></script>
+  <script src="js/navigation/navigation.js"></script>
+  <script src="js/navigation/atc.js"></script>
+  <!-- Missions, audio, input -->
+  <script src="js/missions/missions.js"></script>
+  <script src="js/audio/audioManager.js"></script>
+  <script src="js/input/inputManager.js"></script>
+  <!-- Engine services -->
+  <script src="js/core/stateMachine.js"></script>
+  <script src="js/core/renderer.js"></script>
+  <script src="js/core/camera.js"></script>
+  <!-- UI -->
+  <script src="js/ui/dom.js"></script>
+  <script src="js/ui/gauges.js"></script>
+  <script src="js/ui/glass.js"></script>
+  <script src="js/ui/widgets.js"></script>
+  <script src="js/ui/avionicsUI.js"></script>
+  <script src="js/ui/mapView.js"></script>
+  <script src="js/ui/cockpitPanel.js"></script>
+  <script src="js/ui/hud.js"></script>
+  <script src="js/ui/notifications.js"></script>
+  <script src="js/ui/sidePanel.js"></script>
+  <script src="js/ui/debugOverlay.js"></script>
+  <script src="js/ui/atcWindow.js"></script>
+  <script src="js/ui/overlays.js"></script>
+  <script src="js/ui/loadingScreen.js"></script>
+  <script src="js/ui/mobileControls.js"></script>
+  <script src="js/ui/thumbnails.js"></script>
+  <script src="js/ui/settingsView.js"></script>
+  <script src="js/ui/controlsView.js"></script>
+  <script src="js/ui/menu.js"></script>
+  <script src="js/ui/uiManager.js"></script>
+  <!-- Session and boot -->
+  <script src="js/core/session.js"></script>
+  <script src="js/core/app.js"></script>
+  <script src="js/core/boot.js"></script>
+</body>
+</html>
