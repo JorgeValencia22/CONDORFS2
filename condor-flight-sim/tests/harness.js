@@ -20,9 +20,11 @@ const PURE_MODULES = [
   'js/core/settings.js',
   'js/core/loader.js',
   'js/aircraft/aircraftData.js',
+  'js/aircraft/propeller.js',
   'js/aircraft/engine.js',
   'js/aircraft/systems.js',
   'js/aircraft/failures.js',
+  'js/aircraft/aerodynamics.js',
   'js/aircraft/flightModel.js',
   'js/aircraft/autopilot.js',
   'js/aircraft/aircraft.js',
@@ -40,30 +42,26 @@ const PURE_MODULES = [
 ];
 
 function createContext() {
+  // Load into the real global (fast property access); a minimal browser surface is stubbed.
+  if (global.SIM) return global.SIM;
   const store = new Map();
-  const ctx = {
-    console,
-    performance: { now: () => Number(process.hrtime.bigint() / 1000000n) },
-    requestAnimationFrame: (f) => setImmediate(() => f(0)),
-    setTimeout,
-    clearTimeout,
-    navigator: { hardwareConcurrency: 4 },
-    localStorage: {
-      getItem: (k) => (store.has(k) ? store.get(k) : null),
-      setItem: (k, v) => store.set(k, String(v)),
-      removeItem: (k) => store.delete(k),
-    },
-    addEventListener: () => {},
-    removeEventListener: () => {},
+  global.window = global;
+  global.requestAnimationFrame = (f) => setImmediate(() => f(0));
+  if (!global.navigator) global.navigator = { hardwareConcurrency: 4 };
+  global.localStorage = {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => store.set(k, String(v)),
+    removeItem: (k) => store.delete(k),
   };
-  ctx.window = ctx;
-  vm.createContext(ctx);
+  global.addEventListener = () => {};
+  global.removeEventListener = () => {};
+  delete global.MessageChannel; // loader falls back to setTimeout in Node
   for (const rel of PURE_MODULES) {
     const file = path.join(ROOT, rel);
     if (!fs.existsSync(file)) continue;
-    vm.runInContext(fs.readFileSync(file, 'utf8'), ctx, { filename: rel });
+    vm.runInThisContext(fs.readFileSync(file, 'utf8'), { filename: rel });
   }
-  return ctx.SIM;
+  return global.SIM;
 }
 
 /** Builds region + terrain + weather + environment for physics. */

@@ -9,7 +9,24 @@
   const M = SIM.MathUtil;
   const U = SIM.Units;
 
-  const REALISM_SCALE = { easy: 0.25, normal: 0.65, realistic: 1 };
+  const REALISM_SCALE = { easy: 0.35, normal: 0.75, realistic: 1 };
+
+  /** Gaussian elimination with partial pivoting for a 3×3 system A·x = b. */
+  function solve3(A, b) {
+    const m = A.map((r, i) => r.concat([b[i]]));
+    for (let c = 0; c < 3; c++) {
+      let p = c;
+      for (let r = c + 1; r < 3; r++) if (Math.abs(m[r][c]) > Math.abs(m[p][c])) p = r;
+      if (Math.abs(m[p][c]) < 1e-12) return null;
+      [m[c], m[p]] = [m[p], m[c]];
+      for (let r = 0; r < 3; r++) {
+        if (r === c) continue;
+        const k = m[r][c] / m[c][c];
+        for (let j = c; j < 4; j++) m[r][j] -= k * m[c][j];
+      }
+    }
+    return [m[0][3] / m[0][0], m[1][3] / m[1][1], m[2][3] / m[2][2]];
+  }
   const G_LIMITS = { piston: { pos: 3.8, neg: -1.52 }, jet: { pos: 2.5, neg: -1.0 } };
 
   class Aircraft {
@@ -49,6 +66,7 @@
       this.state = {};
       this.nav = null; // set by the session
       this.attitude = { heading: 0, pitch: 0, roll: 0 };
+      this.computeRigging();
       this.updateState();
     }
 
@@ -105,7 +123,7 @@
       if (this.isJet) this.systems.setFlapsHandle(3);
     }
 
-    /** In flight, trimmed for level flight at the given IAS (kt). */
+    /** In flight, trimmed for steady flight at the given indicated airspeed (KIAS). */
     initAirborne(x, y, z, headingRad, iasKt, env, { approach = false } = {}) {
       this.systems.setupReady({ airborne: true, approach });
       if (approach) {
@@ -113,69 +131,181 @@
         this.systems.flaps.handle = idx;
         this.systems.flaps.pos = this.cfg.aero.flaps[idx].deg;
       }
-      const atm = env.atmosphereAt(y);
-      const tas = (iasKt * U.KT) / Math.sqrt(atm.rho / SIM.Phys.RHO0);
-      const trim = this.solveTrim(tas, atm.rho, approach ? -3 : 0);
+      if (this.cfg.gear.retractable && !approach) {
+        this.systems.gear.handle = 0;
+        this.systems.gear.pos = 0;
+      }
+      const atm = Object.assign({}, env.atmosphereAt(y));
+      const tas = (this.casFromIas(iasKt) * U.KT) / Math.sqrt(atm.rho / SIM.Phys.RHO0);
+      this.engines.forEach((e) => (e.prop = this.cfg.engines[0].propType === 'constant' ? 0.85 : 1));
+      const trim = this.solveTrim(tas, atm, approach ? -3 : 0);
       this.fm.placeInAir(x, y, z, headingRad, tas, trim.alpha + trim.gamma);
-      // Velocity along the flight path angle
       this.fm.vel.set(Math.sin(headingRad) * tas * Math.cos(trim.gamma), tas * Math.sin(trim.gamma), -Math.cos(headingRad) * tas * Math.cos(trim.gamma));
-      this.controls.elevatorTrim = trim.trim;
-      this.engines.forEach((e) => {
-        e.setRunning(trim.throttle);
-        e.prop = this.cfg.engines[0].propType === 'constant' ? 0.8 : 1;
-      });
+      this.controls.elevatorTrim = M.clamp(trim.trim, -1, 1);
+      this.engines.forEach((e) => e.setRunning(trim.throttle, tas * Math.cos(trim.alpha), atm));
       this.fm.onGround = false;
       this.airTime = 10;
     }
 
-    /** Neutral-ish trim for takeoff. */
+    /** Elevator trim for takeoff: trimmed for a full-power climb at Vy. */
     takeoffTrim() {
-      const a = this.cfg.aero;
-      const v = this.cfg.performance.vy * U.KT;
-      const t = this.solveTrim(v, 1.2, 0);
-      return M.clamp(t.trim * 0.8 + (a.cm0 > 0 ? 0 : 0.05), -1, 1);
+      const atm = { rho: SIM.Phys.RHO0, pressure: SIM.Phys.P0, tempC: 15, soundSpeed: 340 };
+      const v = this.casFromIas(this.cfg.performance.vy) * U.KT;
+      const t = this.solveTrim(v, atm, this.isJet ? 6 : 4, { fixedThrottle: 1 });
+      return M.clamp(t.trim, -1, 1);
     }
 
     /**
-     * Solves angle of attack, elevator trim and throttle for steady flight.
-     * @returns {{alpha:number, trim:number, throttle:number, gamma:number}}
+     * Complete steady-state forces/moments (body frame) for a flight condition: aerodynamics,
+     * thrust at the propeller/engine positions, torque reaction, P-factor and gravity.
      */
-    solveTrim(tas, rho, gammaDeg = 0) {
-      const cfg = this.cfg, a = cfg.aero, g = cfg.geometry;
-      const flap = this.systems.flapAero();
-      const q = 0.5 * rho * tas * tas;
+    steadyForces(tas, alpha, gamma, atm, throttle, beta = 0, enginesRunning = true) {
+      const fm = this.fm;
       const W = this.mass * SIM.Phys.G;
-      const gamma = gammaDeg * M.DEG;
-      const clReq = (W * Math.cos(gamma)) / (q * g.wingArea);
-      const alpha = M.clamp((clReq - a.cl0 - flap.cl) / a.clAlpha, -0.1, a.alphaStallDeg * M.DEG * 0.9);
-      const flapFrac = this.systems.flaps.pos / Math.max(1, a.flaps[a.flaps.length - 1].deg);
-      const cm = a.cm0 + a.cmAlpha * Math.sin(alpha) + a.cmFlap * flapFrac;
-      const trim = M.clamp(-cm / a.cmTrim, -1, 1);
-      const AR = (g.span * g.span) / g.wingArea;
-      const cd = a.cd0 + (a.cdGear || 0) * (cfg.gear.retractable ? this.systems.gear.pos : 1) + flap.cd + clReq * clReq / (Math.PI * a.oswald * AR);
-      const dragN = q * g.wingArea * cd - W * Math.sin(gamma);
-      // Binary search throttle that produces the required thrust (per engine)
-      const need = dragN / this.engines.length;
-      let lo = 0, hi = 1;
-      for (let i = 0; i < 18; i++) {
-        const mid = (lo + hi) / 2;
-        if (this.estimateThrust(mid, tas, rho) < need) lo = mid;
-        else hi = mid;
-      }
-      return { alpha, trim, throttle: (lo + hi) / 2, gamma };
+      const vbody = new SIM.Vec3(tas * Math.sin(beta), -tas * Math.sin(alpha) * Math.cos(beta), -tas * Math.cos(alpha) * Math.cos(beta));
+      const vAx = tas * Math.cos(alpha);
+      const props = fm.props.map((p) => Object.assign({}, p));
+      let thrust = 0;
+      const moment = new SIM.Vec3();
+      const force = new SIM.Vec3();
+      this.engines.forEach((e, i) => {
+        const ss = e.steadyState(throttle, vAx, atm, enginesRunning);
+        const T = ss.thrust;
+        thrust += T;
+        const p = e.cfg.position;
+        force.z -= T;
+        moment.x += p[1] * -T;
+        moment.y += p[0] * T;
+        if (e.kind === 'piston') {
+          const rot = e.cfg.rotation || 1;
+          moment.z += ss.torque * rot;
+          moment.y += 0.22 * e.cfg.propDiameter * Math.sin(alpha) * this.realismScale * T * rot;
+          const A = Math.PI * Math.pow(e.cfg.propDiameter / 2, 2);
+          const vi = T > 0 ? 0.5 * (-vAx + Math.sqrt(vAx * vAx + (2 * T) / (atm.rho * A))) : 0;
+          props[i].vi = vi;
+          const mdot = atm.rho * A * (vAx + vi);
+          props[i].swirl = mdot > 1 ? M.clamp(ss.torque / (mdot * 0.7 * e.cfg.propDiameter / 2), 0, 25) : 0;
+        }
+      });
+      const input = fm.aeroInput(vbody, new SIM.Vec3(), atm.rho, 0);
+      input.props = props;
+      input.agl = 1e4;
+      input.onGround = false;
+      input.mach = tas / (atm.soundSpeed || 340);
+      const a = fm.aero.compute(input);
+      force.add(a.force);
+      moment.add(a.moment);
+      // gravity in body axes for pitch attitude θ = α + γ (wings level)
+      const th = alpha + gamma;
+      force.y -= W * Math.cos(th);
+      force.z += W * Math.sin(th);
+      return { force, moment, thrust, CL: a.CL };
     }
 
-    estimateThrust(throttle, v, rho) {
-      const e = this.cfg.engines[0];
-      const sigma = rho / SIM.Phys.RHO0;
-      if (e.type === 'turbofan') {
-        const n1 = e.idleN1 + (100 - e.idleN1) * Math.pow(throttle, 0.85);
-        const n1f = M.clamp((n1 - e.idleN1 * 0.6) / (100 - e.idleN1 * 0.6), 0, 1.05);
-        return e.maxThrust * Math.pow(n1f, 1.9) * Math.pow(sigma, 0.75) * (1 - 0.32 * (v / 340)) + e.maxThrust * 0.012;
+    /**
+     * Numerical trim on the full model. With free throttle it solves angle of attack, elevator trim
+     * and throttle for a flight-path angle; with a fixed throttle it solves angle of attack, trim and
+     * the resulting flight-path angle.
+     * @returns {{alpha:number, trim:number, throttle:number, gamma:number}}
+     */
+    solveTrim(tas, atm, gammaDeg = 0, opts = {}) {
+      const W = this.mass * SIM.Phys.G;
+      const c = this.cfg.geometry.chord;
+      const saved = Object.assign({}, this.controls);
+      const ctl = this.controls;
+      ctl.elevator = 0;
+      ctl.aileron = 0;
+      ctl.rudder = 0;
+      const fixed = opts.fixedThrottle !== undefined;
+      // variables: [alpha, trim, throttle or gamma]
+      const resid = (x) => {
+        ctl.elevatorTrim = x[1];
+        const run = !opts.enginesOff;
+        const r = fixed ? this.steadyForces(tas, x[0], x[2], atm, opts.fixedThrottle, 0, run) : this.steadyForces(tas, x[0], gammaDeg * M.DEG, atm, x[2], 0, run);
+        return [r.force.y / W, r.force.z / W, r.moment.x / (W * c)];
+      };
+      const q = 0.5 * atm.rho * tas * tas;
+      const x = [M.clamp((W / (q * this.cfg.geometry.wingArea)) / 5 - 0.03, -0.05, 0.25), 0, fixed ? gammaDeg * M.DEG : 0.5];
+      const lo = [-0.2, -1.8, fixed ? -0.5 : 0], hi = [0.35, 1.8, fixed ? 0.6 : 1];
+      const h = [1e-4, 1e-3, 1e-3];
+      for (let it = 0; it < 30; it++) {
+        const f = resid(x);
+        if (Math.abs(f[0]) + Math.abs(f[1]) + Math.abs(f[2]) < 1e-6) break;
+        const A = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+        for (let k = 0; k < 3; k++) {
+          const xp = x.slice();
+          xp[k] += h[k];
+          const fp = resid(xp);
+          for (let i = 0; i < 3; i++) A[i][k] = (fp[i] - f[i]) / h[k];
+        }
+        const dx = solve3(A, [-f[0], -f[1], -f[2]]);
+        if (!dx) break;
+        for (let k = 0; k < 3; k++) x[k] = M.clamp(x[k] + M.clamp(dx[k], -0.25, 0.25), lo[k], hi[k]);
       }
-      const powerFrac = (Math.pow(throttle, 1.15) * 0.97 + 0.03) * Math.pow(sigma, 1.1);
-      const v0 = (e.propEff * e.maxPower) / e.staticThrust;
-      return (e.propEff * e.maxPower * powerFrac * 0.95) / Math.sqrt(v * v + v0 * v0);
+      Object.assign(this.controls, saved);
+      return fixed ? { alpha: x[0], trim: x[1], throttle: opts.fixedThrottle, gamma: x[2] } : { alpha: x[0], trim: x[1], throttle: x[2], gamma: gammaDeg * M.DEG };
+    }
+
+    /**
+     * Factory rigging of propeller aircraft: fixed fin offset and aileron tab so the aircraft
+     * flies straight hands-off at cruise power. Torque and slipstream are cancelled at that speed
+     * only, as on the real airplane — at full power and low speed right rudder is still needed.
+     */
+    computeRigging() {
+      const aero = this.fm.aero;
+      if (this.isJet) return;
+      const atm = { rho: 0.96, pressure: 75300, tempC: -1, soundSpeed: 333 };
+      const tas = this.cfg.performance.cruise * U.KT;
+      const t = this.solveTrim(tas, atm, 0);
+      const saved = Object.assign({}, this.controls);
+      this.controls.elevatorTrim = t.trim;
+      const mom = () => this.steadyForces(tas, t.alpha, 0, atm, t.throttle).moment;
+      for (let it = 0; it < 6; it++) {
+        const m0 = mom();
+        aero.rigging.finDeg += 0.1;
+        const m1 = mom();
+        aero.rigging.finDeg -= 0.1;
+        const dN = (m1.y - m0.y) / 0.1;
+        if (Math.abs(dN) > 1e-6) aero.rigging.finDeg = M.clamp(aero.rigging.finDeg - m0.y / dN, -4, 4);
+        const r0 = mom();
+        aero.rigging.aileronDeg += 0.1;
+        const r1 = mom();
+        aero.rigging.aileronDeg -= 0.1;
+        const dL = (r1.z - r0.z) / 0.1;
+        if (Math.abs(dL) > 1e-6) aero.rigging.aileronDeg = M.clamp(aero.rigging.aileronDeg - r0.z / dL, -3, 3);
+      }
+      Object.assign(this.controls, saved);
+      aero.clmaxCache.clear();
+    }
+
+    /** KCAS → KIAS using the POH airspeed calibration table. */
+    iasFromCas(kcas) {
+      const t = this.cfg.asiCalibration;
+      if (!t || kcas <= 0) return Math.max(0, kcas);
+      if (kcas <= t[0][0]) return Math.max(0, kcas * (t[0][1] / t[0][0]));
+      for (let i = 0; i < t.length - 1; i++) {
+        if (kcas <= t[i + 1][0]) return M.lerp(t[i][1], t[i + 1][1], (kcas - t[i][0]) / (t[i + 1][0] - t[i][0]));
+      }
+      const l = t[t.length - 1];
+      return kcas + (l[1] - l[0]);
+    }
+
+    /** KIAS → KCAS (inverse table lookup). */
+    casFromIas(kias) {
+      const t = this.cfg.asiCalibration;
+      if (!t) return kias;
+      if (kias <= t[0][1]) return kias * (t[0][0] / t[0][1]);
+      for (let i = 0; i < t.length - 1; i++) {
+        if (kias <= t[i + 1][1]) return M.lerp(t[i][0], t[i + 1][0], (kias - t[i][1]) / (t[i + 1][1] - t[i][1]));
+      }
+      const l = t[t.length - 1];
+      return kias - (l[1] - l[0]);
+    }
+
+    /** Elevator travel equivalent of full trim (used by the autopilot trim servo). */
+    get trimToElevator() {
+      const h = this.cfg.htail;
+      return h.trimRange / (h.elevator ? h.elevator.up : h.stabilator.up);
     }
 
     /* ---------------------------------------------------------------- control handling */
@@ -228,7 +358,8 @@
     }
 
     adjustProp(delta) {
-      this.engines.forEach((e) => (e.prop = M.clamp(e.prop + delta, 0, 1)));
+      // The keyboard stops at the low-RPM end; the FEATHER detent is only reached with the cockpit lever
+      this.engines.forEach((e) => (e.prop = e.prop < 0.04 && delta > 0 ? M.clamp(e.prop + delta, 0, 1) : M.clamp(e.prop + delta, Math.min(e.prop, 0.04), 1)));
     }
 
     setReverse(on) {
@@ -470,8 +601,7 @@
       const sysCtx = {
         ias: this.fm.ias,
         onGround: this.fm.onGround,
-        aoaDeg: this.fm.alpha * M.RAD,
-        stallAlphaDeg: this.fm.stallAlpha(this.systems.flapAero()) * M.RAD,
+        stallMarginDeg: this.fm.stallMarginDeg,
         agl: this.fm.agl / U.FT,
         oatC: atm.tempC,
         visibleMoisture: env.visibleMoisture(this.fm.pos.y),
@@ -482,6 +612,8 @@
         pressureInHg: atm.pressure / 100 / U.INHG,
         oatC: atm.tempC,
         tas: this.fm.tas,
+        vAxial: this.fm.vAxial || 0,
+        rho: atm.rho,
         busVolts: this.systems.elec.busVolts,
         lowVolts: this.cfg.systems.lowVolts || 24,
         humidity: env.humidity,
@@ -517,7 +649,9 @@
       s.headingDeg = M.wrap360(hdgTrue - this.magVar);
       s.pitchDeg = this.attitude.pitch * M.RAD;
       s.rollDeg = this.attitude.roll * M.RAD;
-      s.iasKt = fm.ias / U.KT;
+      s.casKt = fm.ias / U.KT;
+      // Indicated airspeed includes the pitot-static position error from the POH calibration table
+      s.iasKt = this.iasFromCas(s.casKt);
       s.tasKt = fm.tas / U.KT;
       s.gsKt = fm.vel.horizontalLength() / U.KT;
       s.vsFpm = fm.vel.y / U.FPM;

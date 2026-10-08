@@ -40,6 +40,11 @@
       return LABELS[this.mode];
     }
 
+    /** Default head pitch: a little lower in the 3D cockpit so the panel top is in view. */
+    get defaultHeadPitch() {
+      return (this.vcActive ? -10 : -4) * M.DEG;
+    }
+
     get isCockpit() {
       return this.mode === 'cockpit';
     }
@@ -73,7 +78,7 @@
 
     resetView() {
       this.head.yaw = 0;
-      this.head.pitch = -4 * M.DEG;
+      this.head.pitch = this.defaultHeadPitch;
       this.fovZoom = 1;
       this.resetOrbit();
     }
@@ -244,6 +249,13 @@
         }
       }
 
+      // Narrow (portrait) screens: keep at least ~64° horizontally so the panel and the view ahead fit
+      const aspect = this.render.width / Math.max(1, this.render.height);
+      if (aspect < 1.25 && (this.mode === 'cockpit' || this.mode === 'chase' || this.mode === 'external')) {
+        const minH = 64 * M.DEG;
+        const vForH = 2 * Math.atan(Math.tan(minH / 2) / aspect) * M.RAD;
+        fov = Math.min(110, Math.max(fov, vForH));
+      }
       fov *= this.fovZoom;
       if (Math.abs(cam.fov - fov) > 0.01) cam.fov = fov;
       // Cockpit: shift the projection centre above the 2D panel

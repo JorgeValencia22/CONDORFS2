@@ -99,7 +99,7 @@
             btn('RNG+', () => (this.range = Math.min(80, this.range * 2)), 'Zoom out'),
             btn('RNG−', () => (this.range = Math.max(2.5, this.range / 2)), 'Zoom in'),
             btn('CDI', () => this.nav.radios.toggleCdiSource(), 'Toggle CDI source GPS/VLOC'))));
-      this.ctx = SIM.UI.fitCanvas(this.mapCanvas, 268, 108);
+      this.ctx = SIM.UI.fitCanvas(this.mapCanvas, 268, 108, 1, SIM.UI.canvasPixelRatio);
       this.render();
     }
     setPage(p) {
@@ -339,7 +339,7 @@
       this.h = hh;
       this.range = 8;
       this.canvas = h('canvas.minimap');
-      this.ctx = SIM.UI.fitCanvas(this.canvas, w, hh);
+      this.ctx = SIM.UI.fitCanvas(this.canvas, w, hh, 1, SIM.UI.canvasPixelRatio);
       this.el = unit('minimap', 'MAP',
         this.canvas,
         h('div.minimap-btns',

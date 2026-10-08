@@ -25,7 +25,7 @@
       this.w = w;
       this.h = hh;
       this.canvas = h('canvas.display', { 'aria-label': name, role: 'img' });
-      this.ctx = fitCanvas(this.canvas, w, hh);
+      this.ctx = fitCanvas(this.canvas, w, hh, 1, SIM.UI.canvasPixelRatio);
     }
     clear() {
       this.ctx.fillStyle = '#05070a';

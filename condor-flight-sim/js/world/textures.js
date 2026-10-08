@@ -19,7 +19,8 @@
   function finish(c, repeat = true, anisotropy = 4) {
     const t = new THREE.CanvasTexture(c);
     if (repeat) t.wrapS = t.wrapT = THREE.RepeatWrapping;
-    t.anisotropy = anisotropy;
+    // repeating ground textures get the GPU's best anisotropic filtering (sharp at grazing angles)
+    t.anisotropy = repeat ? Math.max(anisotropy, SIM.Textures.maxAnisotropy || anisotropy) : anisotropy;
     t.needsUpdate = true;
     return t;
   }

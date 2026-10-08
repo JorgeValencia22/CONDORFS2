@@ -9,20 +9,22 @@
   const STORAGE_KEY = 'settings.v1';
 
   const GRAPHICS_PRESETS = {
+    // Resolution never drops below the screen's own pixels (no pixelation): cheaper presets save GPU
+    // time on shadows, draw distance and scenery density instead, and cap very dense phone screens.
     low: {
-      resolutionScale: 0.75, shadows: 'off', renderDistance: 40, terrainDetail: 'low', antialias: false,
+      resolutionScale: 1, pixelRatioCap: 1.5, shadows: 'off', renderDistance: 40, terrainDetail: 'low', antialias: true,
       effects: false, particles: 'low', clouds: 'low', trees: 'low', buildings: 'low',
     },
     medium: {
-      resolutionScale: 1, shadows: 'low', renderDistance: 70, terrainDetail: 'medium', antialias: true,
+      resolutionScale: 1, pixelRatioCap: 2, shadows: 'low', renderDistance: 70, terrainDetail: 'medium', antialias: true,
       effects: true, particles: 'medium', clouds: 'medium', trees: 'medium', buildings: 'medium',
     },
     high: {
-      resolutionScale: 1.25, shadows: 'medium', renderDistance: 110, terrainDetail: 'high', antialias: true,
+      resolutionScale: 1.25, pixelRatioCap: 2, shadows: 'medium', renderDistance: 110, terrainDetail: 'high', antialias: true,
       effects: true, particles: 'high', clouds: 'high', trees: 'high', buildings: 'high',
     },
     ultra: {
-      resolutionScale: 1.5, shadows: 'high', renderDistance: 160, terrainDetail: 'ultra', antialias: true,
+      resolutionScale: 1.5, pixelRatioCap: 2.5, shadows: 'high', renderDistance: 160, terrainDetail: 'ultra', antialias: true,
       effects: true, particles: 'high', clouds: 'high', trees: 'ultra', buildings: 'ultra',
     },
   };
@@ -58,7 +60,7 @@
         },
       },
       sensitivity: { pitch: 1.0, roll: 1.0, yaw: 1.0, mouse: 1.0, curve: 0.35 },
-      camera: { fov: 68, headLook: 1.0, chaseSmoothing: 0.6, defaultView: 'cockpit', shake: true, gForceHead: true },
+      camera: { fov: 68, headLook: 1.0, chaseSmoothing: 0.6, defaultView: 'cockpit', shake: true, gForceHead: true, cockpitMode: '3d' },
       gameplay: {
         units: 'aviation',
         autoRudder: false,
@@ -92,11 +94,16 @@
     };
   }
 
+  SIM.GraphicsPresets = GRAPHICS_PRESETS;
+
   class SettingsManager {
     constructor() {
       this.data = defaults();
       const stored = SIM.Storage.load(STORAGE_KEY, null);
       if (stored) SIM.deepMerge(this.data, stored);
+      // Named presets are re-applied so improved preset definitions reach existing profiles.
+      const g = this.data.graphics;
+      if (GRAPHICS_PRESETS[g.preset]) this.applyGraphicsPreset(g.preset, { quiet: true });
       // Make sure newly added bindings exist even if the stored profile predates them.
       if (SIM.DefaultBindings) {
         for (const action of Object.keys(SIM.DefaultBindings)) {
@@ -127,8 +134,12 @@
       if (!silent) SIM.events.emit('settings:changed', { path, value });
     }
 
-    applyGraphicsPreset(name) {
+    applyGraphicsPreset(name, { quiet = false } = {}) {
       const preset = GRAPHICS_PRESETS[name];
+      if (quiet) {
+        if (preset) Object.assign(this.data.graphics, preset, { preset: name });
+        return;
+      }
       this._applyingPreset = true;
       if (preset) Object.keys(preset).forEach((k) => this.set('graphics.' + k, preset[k], { silent: true }));
       this.data.graphics.preset = name;

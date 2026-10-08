@@ -82,6 +82,31 @@
       r.innerHTML = '';
       this.hud = new SIM.Hud(session);
       this.panel = new SIM.CockpitPanel(session);
+      // 3D virtual cockpit (default): replaces the simple cockpit frame of the aircraft model
+      this.vc = null;
+      this.panelWanted = this.app.settings.data.camera.cockpitMode === '2d' ? true : false;
+      if (session.model && this.app.settings.data.camera.cockpitMode !== '2d') {
+        try {
+          this.vc = new SIM.VirtualCockpit(session, this.panel);
+          const u = session.model.userData;
+          if (u.cockpit) {
+            u.cockpit.parent && u.cockpit.parent.remove(u.cockpit);
+            SIM.RenderUtils.disposeObject(u.cockpit);
+          }
+          session.model.add(this.vc.group);
+          u.cockpit = this.vc.group;
+          this.vc.group.visible = false;
+          if (session.camera) {
+            session.camera.vcActive = true;
+            session.camera.head.pitch = session.camera.defaultHeadPitch;
+          }
+        } catch (e) {
+          console.error('[VirtualCockpit] build failed, using the 2D panel', e);
+          this.vc = null;
+          this.panelWanted = true;
+        }
+      }
+      this.vcTip = h('div.vc-tip');
       this.side = new SIM.SidePanel(session);
       this.atcWin = new SIM.ATCWindow(session);
       this.map = new SIM.MapOverlay(this);
@@ -91,7 +116,7 @@
       this.fps = h('div.fps-counter.mono');
       this.noGl = !this.app.render || !this.app.render.available ? h('div.nogl-banner', icon('warning'), h('span', 'Instrument-only mode: WebGL is unavailable, the 3D view is disabled. All systems, instruments, map and ATC remain fully functional.')) : null;
       this.flags = { hud: this.app.settings.data.gameplay.showHud, side: false, atc: false, map: false, debug: false };
-      r.append(this.rain.canvas, this.hud.el, this.camLabel, this.fps, this.notifications.el, this.side.el, this.atcWin.el, this.debug.el, this.map.root, this.panel.root, this.overlayLayer);
+      r.append(this.vcTip, this.rain.canvas, this.hud.el, this.camLabel, this.fps, this.notifications.el, this.side.el, this.atcWin.el, this.debug.el, this.map.root, this.panel.root, this.overlayLayer);
       if (this.noGl) r.append(this.noGl);
       if (session.mission) {
         this.missionHud = new SIM.Overlays.MissionHud(session.mission);
@@ -103,7 +128,6 @@
         r.classList.add('touch');
       }
       this.applyFlags();
-      this.panel.setVisible(!this.noGl || true);
       this.bindEvents(session);
       r.classList.add('visible');
       this.sideTimer = 0;
@@ -113,6 +137,10 @@
 
     teardown() {
       if (this._onResize) window.removeEventListener('resize', this._onResize);
+      if (this.vc) {
+        this.vc.dispose();
+        this.vc = null;
+      }
       if (this.debug) this.debug.dispose();
       this.overlayLayer.innerHTML = '';
       this.notifications.clear();
@@ -136,7 +164,9 @@
       const cockpit = !this.session.camera || this.session.camera.isCockpit;
       const panelOn = cockpit && this.panelWanted !== false;
       this.panel.setVisible(panelOn);
-      this.hud.el.classList.toggle('show', f.hud && (!cockpit || !panelOn));
+      // the 3D cockpit has real instruments: no HUD over it unless the 2D panel is off and no VC
+      this.hud.el.classList.toggle('show', f.hud && (!cockpit || (!panelOn && !this.vc)));
+      this.layout();
       this.side.el.classList.toggle('open', f.side);
       this.atcWin.el.classList.toggle('open', f.atc);
       this.map.root.classList.toggle('open', f.map);
@@ -316,10 +346,13 @@
       const vp = this.viewport;
       let drag = null;
       vp.addEventListener('contextmenu', (e) => e.preventDefault());
+      const vcActive = () => this.vc && this.session && this.session.camera && this.session.camera.isCockpit && this.app.render && this.app.render.camera;
+      const rect = () => vp.getBoundingClientRect();
       vp.addEventListener('pointerdown', (e) => {
         if (!this.session || !this.session.camera) return;
         this.app.audio.unlock();
-        drag = { x: e.clientX, y: e.clientY, button: e.button };
+        const onControl = vcActive() && this.vc.pointerDown(e, this.app.render.camera, rect());
+        drag = { x: e.clientX, y: e.clientY, button: e.button, vc: onControl };
         vp.setPointerCapture(e.pointerId);
       });
       vp.addEventListener('pointermove', (e) => {
@@ -328,25 +361,54 @@
         const input = this.app.input;
         input.mouseYoke.active = true;
         input.setMouseYoke((e.clientX / window.innerWidth) * 2 - 1, (e.clientY / (window.innerHeight * (1 - (s.camera ? s.camera.panelFraction : 0)))) * 2 - 1);
+        const ddx = drag ? e.clientX - drag.x : 0, ddy = drag ? e.clientY - drag.y : 0;
+        if (vcActive()) {
+          this.vc.pointerMove(e, ddx, ddy, this.app.render.camera, rect());
+          vp.style.cursor = drag && drag.vc ? (this.vc.cursor === 'grab' ? 'grabbing' : this.vc.cursor || 'pointer') : this.vc.cursor || '';
+          this.showTip(drag && !drag.vc ? null : this.vc.tip, e);
+        } else if (vp.style.cursor) {
+          vp.style.cursor = '';
+          this.showTip(null);
+        }
         if (!drag || !s.camera) return;
-        const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+        const dx = ddx, dy = ddy;
         drag.x = e.clientX;
         drag.y = e.clientY;
+        if (drag.vc) return; // dragging a cockpit control, not looking around
         const cockpit = s.camera.isCockpit;
         if (drag.button === 2 || (!cockpit && drag.button === 0) || (cockpit && drag.button === 0 && !this.app.settings.data.controls.mouseYoke)) {
           s.camera.look(dx * 0.005, dy * 0.005);
         }
       });
-      const end = () => (drag = null);
+      const end = () => {
+        if (this.vc) this.vc.pointerUp();
+        drag = null;
+      };
       vp.addEventListener('pointerup', end);
       vp.addEventListener('pointercancel', end);
       vp.addEventListener('pointerleave', () => (this.app.input.mouseYoke.active = false));
       vp.addEventListener('wheel', (e) => {
         if (!this.session || !this.session.camera) return;
         e.preventDefault();
+        if (vcActive() && this.vc.wheel(e, this.app.render.camera, rect())) return;
         this.session.camera.zoom(e.deltaY > 0 ? 1.1 : 1 / 1.1);
       }, { passive: false });
       vp.addEventListener('dblclick', () => this.session && this.session.camera && this.session.camera.resetView());
+    }
+
+    showTip(text, e) {
+      const t = this.vcTip;
+      if (!t) return;
+      if (!text) {
+        t.classList.remove('show');
+        return;
+      }
+      if (t.textContent !== text) t.textContent = text;
+      t.classList.add('show');
+      if (e) {
+        t.style.left = Math.min(window.innerWidth - 260, e.clientX + 16) + 'px';
+        t.style.top = Math.max(8, e.clientY - 34) + 'px';
+      }
     }
 
     /* ------------------------------------------------------------------ per frame */
@@ -356,6 +418,7 @@
       if (!s) return;
       if (this.hud.el.classList.contains('show')) this.hud.update();
       this.panel.update(dt);
+      if (this.vc) this.vc.update(dt, { cockpit: !!(s.camera && s.camera.isCockpit) });
       this.sideTimer -= dt;
       if (this.flags.side && this.sideTimer <= 0) {
         this.sideTimer = 0.25;

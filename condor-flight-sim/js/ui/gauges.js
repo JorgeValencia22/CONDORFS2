@@ -113,14 +113,15 @@
       this.size = size;
       this.name = name;
       this.canvas = h('canvas.gauge', { 'aria-label': name, role: 'img' });
-      this.ctx = fitCanvas(this.canvas, size, size);
+      this.pr = SIM.UI.canvasPixelRatio;
+      this.ctx = fitCanvas(this.canvas, size, size, 1, this.pr);
       this.face = null;
       this.r = size / 2;
     }
 
     prepare() {
       const c = document.createElement('canvas');
-      const ctx = fitCanvas(c, this.size, this.size);
+      const ctx = fitCanvas(c, this.size, this.size, 1, this.pr);
       ctx.translate(this.r, this.r);
       bezel(ctx, this.r);
       this.drawFace(ctx, this.r);
@@ -546,7 +547,7 @@
       this.eng = eng;
       this.fuelCfg = fuelCfg;
       this.canvas = h('canvas.gauge.cluster', { 'aria-label': 'Engine instruments', role: 'img' });
-      this.ctx = fitCanvas(this.canvas, w, hgt);
+      this.ctx = fitCanvas(this.canvas, w, hgt, 1, SIM.UI.canvasPixelRatio);
     }
     half(ctx, x, y, w, hh, title, vL, vR, rangeL, rangeR, labL, labR, greenL, greenR) {
       ctx.save();
@@ -691,7 +692,7 @@
       this.w = w;
       this.h = hh;
       this.canvas = h('canvas.gauge.compass', { 'aria-label': 'Magnetic compass', role: 'img' });
-      this.ctx = fitCanvas(this.canvas, w, hh);
+      this.ctx = fitCanvas(this.canvas, w, hh, 1, SIM.UI.canvasPixelRatio);
     }
     render(d) {
       const ctx = this.ctx, w = this.w, hh = this.h;

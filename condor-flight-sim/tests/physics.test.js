@@ -195,7 +195,7 @@ async function main() {
       const vsErr = targetVs - ac.fm.vel.y;
       const pitchCmd = SIM.MathUtil.clamp((flare ? 5 : 2) + vsErr * 3, -5, 12);
       const jet = id === 'b738';
-      ac.input.pitch = SIM.MathUtil.clamp((pitchCmd - s.pitchDeg) * (jet ? 0.05 : 0.066 / ac.cfg.aero.cmDe) - ac.fm.omega.x * (jet ? 2.5 : 0.6), -1, 1);
+      ac.input.pitch = SIM.MathUtil.clamp((pitchCmd - s.pitchDeg) * (jet ? 0.05 : 0.066) - ac.fm.omega.x * (jet ? 2.5 : 0.6), -1, 1);
       const trk = SIM.MathUtil.angleDiff(s.trueHeadingDeg, end.hdg - SIM.MathUtil.clamp(cross * 0.3, -20, 20));
       ac.input.roll = SIM.MathUtil.clamp((SIM.MathUtil.clamp(trk * 1.2, -10, 10) - s.rollDeg) * 0.05 + ac.fm.omega.z * 0.4, -1, 1);
       const thr = flare ? 0 : SIM.MathUtil.clamp(0.4 + throttlePid.update(vapp - s.iasKt, dt), 0, 1);

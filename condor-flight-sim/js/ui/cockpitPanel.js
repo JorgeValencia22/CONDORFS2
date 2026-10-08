@@ -90,6 +90,8 @@
       this.im = new InstrumentModel(this.ac);
       this.widgets = [];
       this.gauges = [];
+      /** Instruments by key: { factory, data } — the 3D cockpit builds its own copies from these. */
+      this.spec = {};
       this.units = [];
       this.timer = 0;
       this.wtimer = 0;
@@ -99,8 +101,16 @@
       this.root.append(this.inner);
       this.root.style.setProperty('--panel', this.cfg.cockpit.panelColor);
       this.root.style.setProperty('--panel-edge', this.cfg.cockpit.panelEdge);
-      if (this.layout === 'airliner') this.buildAirliner();
-      else this.buildGA(this.layout === 'ga-twin');
+      // The panel is CSS-scaled to the window: draw its canvases at the final on-screen density
+      const lh = this.layout === 'airliner' ? 548 : 466;
+      const shown = Math.min(window.innerWidth / 1600, (window.innerHeight * (window.innerWidth < 900 ? 0.4 : 0.44)) / lh);
+      SIM.UI.canvasPixelRatio = Math.min(window.devicePixelRatio || 1, 2) * Math.max(1, shown);
+      try {
+        if (this.layout === 'airliner') this.buildAirliner();
+        else this.buildGA(this.layout === 'ga-twin');
+      } finally {
+        SIM.UI.canvasPixelRatio = null;
+      }
       this.logicalW = 1600;
       this.logicalH = this.layout === 'airliner' ? 548 : 466;
       this.inner.style.width = this.logicalW + 'px';
@@ -110,6 +120,14 @@
     w(widget) {
       this.widgets.push(widget);
       return widget.el;
+    }
+
+    /** Creates a keyed instrument from a factory and registers it for the panel and the 3D cockpit. */
+    mk(key, factory, data) {
+      const gauge = factory();
+      this.spec[key] = { factory, data };
+      this.gauges.push({ gauge, data });
+      return gauge;
     }
 
     g(gauge, data, cls = '') {
@@ -126,35 +144,28 @@
 
     sixPack(size) {
       const ac = this.ac, im = this.im, perf = this.cfg.performance;
-      const asi = new G.AirspeedIndicator(size, perf);
-      const ai = new G.AttitudeIndicator(size);
-      const alt = new G.Altimeter(size);
-      const tc = new G.TurnCoordinator(size);
-      const hi = new G.HeadingIndicator(size);
-      const vsi = new G.VerticalSpeedIndicator(size, 2000);
+      const inHg = () => this.s.region.id === 'sfbay' && !this.s.app.settings.metric;
+      const asi = this.mk('asi', () => new G.AirspeedIndicator(size, perf), () => ({ ias: im.ias }));
+      const ai = this.mk('ai', () => new G.AttitudeIndicator(size), () => ({ pitch: im.ai.pitch, roll: im.ai.roll, flag: ac.systems.gyro.spin < 0.45 }));
+      const alt = this.mk('alt', () => new G.Altimeter(size), () => ({ alt: ac.state.altFt, baroText: inHg() ? (ac.kollsman / SIM.Units.INHG).toFixed(2) : Math.round(ac.kollsman).toString() }));
+      const tc = this.mk('tc', () => new G.TurnCoordinator(size), () => ({ turnRate: im.turnRate, slip: M.clamp(ac.fm.lateralG || 0, -0.4, 0.4), flag: ac.systems.gyro.elecSpin < 0.5 }));
+      const hi = this.mk('hi', () => new G.HeadingIndicator(size), () => ({ heading: im.hi, bug: ac.autopilot.hdgBug, flag: ac.systems.gyro.spin < 0.45 }));
+      const vsi = this.mk('vsi', () => new G.VerticalSpeedIndicator(size, 2000), () => ({ vs: im.vsi }));
       const baroKnob = new W.Knob('BARO', (d, c) => (ac.kollsman = M.clamp(ac.kollsman + d * (c ? 3.39 : 1), 940, 1060)), { small: true, noLabel: true });
       const hdgKnob = new W.Knob('HDG BUG', (d, c) => ac.autopilot.adjustHeading(d * (c ? 10 : 1)), { small: true, noLabel: true });
       const syncBtn = h('button.gauge-btn', { type: 'button', title: 'Sync heading indicator to compass', onclick: () => im.syncHeading() }, 'SYNC');
       const stdBtn = h('button.gauge-btn', { type: 'button', title: 'Set altimeter to current QNH', onclick: () => (ac.kollsman = this.s.world.weather.qnh) }, 'QNH');
-      const inHg = () => this.s.region.id === 'sfbay' && !this.s.app.settings.metric;
       return h('div.cp-sixpack',
-        this.g(asi, () => ({ ias: im.ias })),
-        this.g(ai, () => ({ pitch: im.ai.pitch, roll: im.ai.roll, flag: ac.systems.gyro.spin < 0.45 })),
+        h('div.gauge-wrap', asi.canvas),
+        h('div.gauge-wrap', ai.canvas),
         h('div.gauge-wrap', alt.canvas, h('div.gauge-knobs.left', baroKnob.el, stdBtn)),
-        this.g(tc, () => ({ turnRate: im.turnRate, slip: M.clamp(ac.fm.lateralG || 0, -0.4, 0.4), flag: ac.systems.gyro.elecSpin < 0.5 })),
+        h('div.gauge-wrap', tc.canvas),
         h('div.gauge-wrap', hi.canvas, h('div.gauge-knobs.left', syncBtn), h('div.gauge-knobs.right', hdgKnob.el)),
-        this.g(vsi, () => ({ vs: im.vsi }))
-      , this.registerGauges([[alt, () => ({ alt: ac.state.altFt, baroText: inHg() ? (ac.kollsman / SIM.Units.INHG).toFixed(2) : Math.round(ac.kollsman).toString() })], [hi, () => ({ heading: im.hi, bug: ac.autopilot.hdgBug, flag: ac.systems.gyro.spin < 0.45 })]]));
-    }
-
-    registerGauges(list) {
-      list.forEach(([gauge, data]) => this.gauges.push({ gauge, data }));
-      return null;
+        h('div.gauge-wrap', vsi.canvas));
     }
 
     cdi(size, n) {
       const nav = this.nav;
-      const gauge = new G.CourseIndicator(size, `NAV ${n}`);
       const obs = new W.Knob('OBS', (d, c) => {
         if (n === 1 && nav.radios.cdiSource === 'GPS') return;
         nav.radios.adjustObs('nav' + n, d * (c ? 10 : 1));
@@ -168,7 +179,7 @@
         const r = nav.receivers.nav2;
         return { valid: r.valid, course: nav.radios.obs.nav2, needle: r.needle || 0, toFrom: r.toFrom, source: 'VLOC 2', ident: r.ident };
       };
-      this.gauges.push({ gauge, data });
+      const gauge = this.mk('cdi' + n, () => new G.CourseIndicator(size, `NAV ${n}`), data);
       return h('div.gauge-wrap', gauge.canvas, h('div.gauge-knobs.left', obs.el));
     }
 
@@ -255,8 +266,7 @@
     }
 
     glareshield(extra) {
-      const compass = new G.CompassStrip(150, 34);
-      this.gauges.push({ gauge: compass, data: () => ({ heading: this.im.compass }) });
+      const compass = this.mk('compass', () => new G.CompassStrip(150, 34), () => ({ heading: this.im.compass }));
       return h('div.cp-glare', this.annunciators(), h('div.cp-compass', compass.canvas), extra || null, this.u(new A.ClockUnit(this.s)), h('div.cp-model-label', this.cfg.cockpit.label));
     }
 
@@ -278,36 +288,26 @@
 
       let engineCol;
       if (!twin) {
-        const tach = new G.Tachometer(size, eng);
-        const cluster = new G.EngineCluster(268, 126, eng, cfg.fuel);
-        this.gauges.push({ gauge: tach, data: () => ({ rpm: e0.rpm, hours: e0.hours }) });
-        this.gauges.push({
-          gauge: cluster,
-          data: () => {
+        const tach = this.mk('tach', () => new G.Tachometer(size, eng), () => ({ rpm: e0.rpm, hours: e0.hours }));
+        const cluster = this.mk('cluster', () => new G.EngineCluster(268, 126, eng, cfg.fuel),
+          () => {
             const pw = sys.elec.busPowered;
             return {
               fuelL: pw ? sys.tanks[0].qty : 0, fuelR: pw ? sys.tanks[1].qty : 0,
               oilT: pw ? e0.oilTemp : 40, oilP: e0.oilPress, egt: pw ? e0.egt : 300, ff: e0.fuelFlow,
               vac: sys.gyro.vacuum, amp: pw ? M.clamp(sys.elec.battAmps, -60, 60) : 0,
             };
-          },
-        });
+          });
         engineCol = h('div.cp-engine', h('div.gauge-wrap', tach.canvas), h('div.gauge-wrap.wide', cluster.canvas));
       } else {
         const e1 = ac.engines[1];
         const gs = 86;
-        const mp = new G.ArcGauge(gs, { min: 10, max: 35, green: [15, 29.6], red: [29.6, 30.2], title: 'MAN PRESS', unit: 'IN HG', labels: [10, 15, 20, 25, 30, 35], ticks: 10 });
-        const rpm = new G.Tachometer(gs, eng, true);
-        const ff = new G.ArcGauge(gs, { min: 0, max: 30, green: [4, 26], title: 'FUEL FLOW', unit: 'GPH', labels: [0, 10, 20, 30], ticks: 6 });
-        const fuel = new G.ArcGauge(gs, { min: 0, max: cfg.fuel.tanks[0].capacity, green: [10, cfg.fuel.tanks[0].capacity], red: [0, 8], title: 'FUEL L · R', unit: 'GAL', labels: [0, 34, 68], ticks: 4 });
-        const oil = new G.ArcGauge(gs, { min: 0, max: 120, green: [30, 100], title: 'OIL PRESS', unit: 'PSI', labels: [0, 60, 120], ticks: 6 });
-        const egt = new G.ArcGauge(gs, { min: 200, max: 900, green: [400, 800], title: 'EGT', unit: '°C', labels: [200, 550, 900], ticks: 7 });
-        this.gauges.push({ gauge: mp, data: () => ({ value: e0.manifold, value2: e1.manifold }) });
-        this.gauges.push({ gauge: rpm, data: () => ({ rpm: e0.rpm, rpm2: e1.rpm }) });
-        this.gauges.push({ gauge: ff, data: () => ({ value: e0.fuelFlow, value2: e1.fuelFlow }) });
-        this.gauges.push({ gauge: fuel, data: () => ({ value: sys.elec.busPowered ? sys.tanks[0].qty : 0, value2: sys.elec.busPowered ? sys.tanks[1].qty : 0 }) });
-        this.gauges.push({ gauge: oil, data: () => ({ value: e0.oilPress, value2: e1.oilPress }) });
-        this.gauges.push({ gauge: egt, data: () => ({ value: sys.elec.busPowered ? e0.egt : 200, value2: sys.elec.busPowered ? e1.egt : 200 }) });
+        const mp = this.mk('mp', () => new G.ArcGauge(gs, { min: 10, max: 35, green: [15, 29.6], red: [29.6, 30.2], title: 'MAN PRESS', unit: 'IN HG', labels: [10, 15, 20, 25, 30, 35], ticks: 10 }), () => ({ value: e0.manifold, value2: e1.manifold }));
+        const rpm = this.mk('rpm', () => new G.Tachometer(gs, eng, true), () => ({ rpm: e0.rpm, rpm2: e1.rpm }));
+        const ff = this.mk('ff', () => new G.ArcGauge(gs, { min: 0, max: 30, green: [4, 26], title: 'FUEL FLOW', unit: 'GPH', labels: [0, 10, 20, 30], ticks: 6 }), () => ({ value: e0.fuelFlow, value2: e1.fuelFlow }));
+        const fuel = this.mk('fuel', () => new G.ArcGauge(gs, { min: 0, max: cfg.fuel.tanks[0].capacity, green: [10, cfg.fuel.tanks[0].capacity], red: [0, 8], title: 'FUEL L · R', unit: 'GAL', labels: [0, 34, 68], ticks: 4 }), () => ({ value: sys.elec.busPowered ? sys.tanks[0].qty : 0, value2: sys.elec.busPowered ? sys.tanks[1].qty : 0 }));
+        const oil = this.mk('oil', () => new G.ArcGauge(gs, { min: 0, max: 120, green: [30, 100], title: 'OIL PRESS', unit: 'PSI', labels: [0, 60, 120], ticks: 6 }), () => ({ value: e0.oilPress, value2: e1.oilPress }));
+        const egt = this.mk('egt', () => new G.ArcGauge(gs, { min: 200, max: 900, green: [400, 800], title: 'EGT', unit: '°C', labels: [200, 550, 900], ticks: 7 }), () => ({ value: sys.elec.busPowered ? e0.egt : 200, value2: sys.elec.busPowered ? e1.egt : 200 }));
         engineCol = h('div.cp-engine.twin', [mp, rpm, ff, fuel, oil, egt].map((gg) => h('div.gauge-wrap.small', gg.canvas)));
       }
 
@@ -320,7 +320,7 @@
       // Lower row: switches, ignition, fuel, engine controls, flaps, trim, yoke, minimap
       const engineControls = h('div.cp-levers',
         this.w(new W.Lever(twin ? 'THROTTLES' : 'THROTTLE', () => e0.throttle, (v) => ac.setThrottle(v), { color: '#16171a' })),
-        twin ? this.w(new W.Lever('PROPS', () => e0.prop, (v) => ac.engines.forEach((e) => (e.prop = v)), { color: '#1f4fa0', format: (v) => `${Math.round(2000 + v * 700)}` })) : null,
+        twin ? this.w(new W.Lever('PROPS', () => e0.prop, (v) => ac.engines.forEach((e) => (e.prop = v)), { color: '#1f4fa0', format: (v) => (v < 0.03 && e0.propeller.featherable ? 'FTHR' : `${Math.round(e0.cfg.minGovRPM + (e0.cfg.maxRPM - e0.cfg.minGovRPM) * Math.max(0, Math.min(1, (v - 0.04) / 0.96)))}`) })) : null,
         this.w(new W.Lever(twin ? 'MIXTURES' : 'MIXTURE', () => e0.mixture, (v) => ac.setMixture(v), { color: '#a2231b' })),
         cfg.systems.carbHeat ? this.w(new W.PullKnob('CARB HEAT', () => e0.carbHeat, () => ac.engines.forEach((e) => (e.carbHeat = !e.carbHeat)), { color: '#3a3a3a' })) : null);
 
@@ -346,20 +346,13 @@
 
     buildAirliner() {
       const ac = this.ac, cfg = this.cfg, sys = ac.systems, nav = this.nav, s = this.s;
-      const pfd = new SIM.Glass.PFD(330, 330, cfg.performance);
-      const nd = new SIM.Glass.ND(330, 330);
-      const eicas = new SIM.Glass.EngineDisplay(250, 336);
       const im = this.im;
-      this.gauges.push({
-        gauge: pfd,
-        data: () => {
+      const pfd = this.mk('pfd', () => new SIM.Glass.PFD(330, 330, cfg.performance),
+        () => {
           const st = ac.state;
           const c = nav.receivers.nav1;
           const ap = ac.autopilot;
-          const flap = sys.flapAero();
-          const W8 = ac.mass * SIM.Phys.G;
-          const clmax = cfg.aero.cl0 + cfg.aero.clAlpha * cfg.aero.alphaStallDeg * M.DEG + flap.clmax;
-          const vStall = Math.sqrt((2 * W8) / (1.225 * cfg.geometry.wingArea * clmax)) / SIM.Units.KT;
+          const vStall = ac.fm.aero.stallSpeedKt(ac.mass, sys.flaps.pos);
           this._lastIas = this._lastIas ?? st.iasKt;
           const trend = (st.iasKt - this._lastIas) * 10 * 30;
           this._lastIas = M.lerp(this._lastIas, st.iasKt, 0.2);
@@ -370,27 +363,22 @@
             loc: c.valid && c.type === 'ILS' ? c.needle : null, gsDev: c.valid && c.gsValid ? c.gsNeedle : null,
             mins: st.aglFt < 220 && st.aglFt > 150 && !st.onGround && st.vsFpm < 0,
           };
-        },
-      });
-      this.gauges.push({
-        gauge: nd,
-        data: () => ({
+        });
+      const nd = this.mk('nd', () => new SIM.Glass.ND(330, 330),
+        () => ({
           powered: sys.elec.avionicsPowered, hdg: ac.state.headingDeg, trueHdg: ac.state.trueHeadingDeg, x: ac.fm.pos.x, z: ac.fm.pos.z, altFt: ac.state.altFtTrue,
           route: nav.route, activeLeg: nav.activeLeg, wp: nav.gps.wp, wpDist: nav.gps.dist, eta: nav.gps.wp ? SIM.NavigationSystem.formatClock(nav.gps.eta) + 'Z' : '',
           gsKt: ac.state.gsKt, tasKt: ac.state.tasKt, windDir: s.world.weather.windProfile(ac.fm.pos.y).dir - s.region.magVar, windKt: s.world.weather.windProfile(ac.fm.pos.y).speed / SIM.Units.KT,
           airports: s.airports, traffic: s.traffic ? s.traffic.contacts() : [],
-        }),
-      });
-      this.gauges.push({
-        gauge: eicas,
-        data: () => ({
+        }));
+      const eicas = this.mk('eicas', () => new SIM.Glass.EngineDisplay(250, 336),
+        () => ({
           powered: sys.elec.busPowered,
           engines: ac.engines.map((e) => ({ n1: e.n1, n2: e.n2, egt: e.egt, ff: e.fuelFlow, oilP: e.oilPress, reverse: e.reverserPos > 0.5, state: e.state })),
           tanks: sys.tanks.map((t) => ({ name: t.name, qty: t.qty })),
           totalFuel: sys.totalFuel, flaps: sys.flapLabel(), flapsMoving: sys.flaps.moving, gear: sys.gear.pos, speedbrake: sys.speedbrake.pos,
           alerts: [sys.warnings.gear && 'GEAR', sys.warnings.lowFuel && 'LOW FUEL', sys.warnings.overspeed && 'OVERSPEED', sys.warnings.oilPress && 'OIL PRESS', ac.engines.some((e) => e.failed) && 'ENGINE FAIL'].filter(Boolean),
-        }),
-      });
+        }));
       // ND range buttons
       const ndWrap = h('div.gauge-wrap.display', nd.canvas, h('div.nd-range',
         h('button.av-btn.tiny', { type: 'button', onclick: () => (nd.range = Math.max(5, nd.range / 2)) }, 'RNG −'),

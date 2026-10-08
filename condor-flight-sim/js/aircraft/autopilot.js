@@ -297,7 +297,7 @@
       // Trim servo slowly offloads the elevator, as on a real autopilot.
       if (Math.abs(ctl.apElevator) > 0.05) {
         ctl.elevatorTrim = M.clamp(ctl.elevatorTrim + Math.sign(ctl.apElevator) * dt * 0.03, -1, 1);
-        this.pitchPid.i -= Math.sign(ctl.apElevator) * dt * 0.03 * (ac.cfg.aero.cmTrim / ac.cfg.aero.cmDe);
+        this.pitchPid.i -= Math.sign(ctl.apElevator) * dt * 0.03 * ac.trimToElevator;
       }
     }
 

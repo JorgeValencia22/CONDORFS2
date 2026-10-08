@@ -136,8 +136,12 @@
   };
 
   /** Hi-DPI canvas sizing helper. */
-  function fitCanvas(canvas, w, h, scale = 1) {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2) * scale;
+  /**
+   * Sizes a canvas for crisp drawing in logical pixels. `pixelRatio` overrides the screen density
+   * (instrument textures in the 3D cockpit, panels shown enlarged).
+   */
+  function fitCanvas(canvas, w, h, scale = 1, pixelRatio = null) {
+    const dpr = (pixelRatio || Math.min(window.devicePixelRatio || 1, 2)) * scale;
     canvas.width = Math.round(w * dpr);
     canvas.height = Math.round(h * dpr);
     canvas.style.width = w + 'px';
@@ -147,5 +151,6 @@
     return ctx;
   }
 
-  SIM.UI = { h, append, $, $$, icon, Fmt, fitCanvas, ICONS };
+  // Pixel ratio captured by instruments created while it is set (null = screen density)
+  SIM.UI = { h, append, $, $, icon, Fmt, fitCanvas, ICONS, canvasPixelRatio: null };
 })(window.SIM);

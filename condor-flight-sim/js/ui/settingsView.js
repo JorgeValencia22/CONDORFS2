@@ -144,6 +144,7 @@
         row('Head-look / orbit speed', slider('camera.headLook', 0.3, 2.5, 0.05, pct)),
         row('Chase camera smoothing', slider('camera.chaseSmoothing', 0, 1, 0.05, pct)),
         row('Default view', select('camera.defaultView', [['cockpit', 'COCKPIT'], ['external', 'EXTERNAL']])),
+        row('Cockpit', select('camera.cockpitMode', [['3d', '3D COCKPIT'], ['2d', '2D PANEL']]), '3D: clickable virtual cockpit (I toggles the 2D panel on top). Applies on the next flight.'),
         row('Camera shake (buffet, turbulence)', toggle('camera.shake')),
         row('G-force head movement', toggle('camera.gForceHead')));
       this.footer(body, app, 'camera');

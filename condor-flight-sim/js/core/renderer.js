@@ -61,6 +61,8 @@
       const gl = renderer.getContext();
       const dbg = gl.getExtension('WEBGL_debug_renderer_info');
       this.gpuName = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : 'WebGL';
+      // Ground, runway and cockpit textures use the best anisotropic filtering the GPU offers
+      SIM.Textures.maxAnisotropy = Math.min(16, renderer.capabilities.getMaxAnisotropy() || 4);
       this.scene = new THREE.Scene();
       this.camera = new THREE.PerspectiveCamera(65, 1, 0.15, 200000);
       this.scene.add(this.camera);
@@ -71,6 +73,7 @@
       this.resize();
       window.addEventListener('resize', () => this.resize());
       SIM.events.on('settings:changed', ({ path }) => {
+        if (path === 'graphics.preset' || path === '*') this.autoBase = null;
         if (path.startsWith('graphics') || path === '*') this.applySettings();
       });
     }
@@ -92,13 +95,26 @@
       return this.renderer && this.antialiasAtCreate !== !!this.settings.data.graphics.antialias;
     }
 
+    /** Device pixel ratio actually rendered (screen density capped by the preset). */
+    basePixelRatio() {
+      const g = this.settings.data.graphics;
+      const dpr = window.devicePixelRatio || 1;
+      return Math.min(dpr, g.pixelRatioCap || 2);
+    }
+
     resize() {
       if (!this.renderer) return;
       const w = this.container.clientWidth || window.innerWidth;
       const h = this.container.clientHeight || window.innerHeight;
       const g = this.settings.data.graphics;
-      const ratio = Math.min(window.devicePixelRatio || 1, 2) * (g.resolutionScale || 1) * this.dynamicScale;
-      this.renderer.setPixelRatio(M.clamp(ratio, 0.4, 2.5));
+      const dpr = window.devicePixelRatio || 1;
+      let ratio = this.basePixelRatio() * (g.resolutionScale || 1) * this.dynamicScale;
+      // Never render below the screen's own CSS pixel grid in automatic mode: that is what makes a
+      // 3D view look pixelated. Only an explicit custom resolution scale below 100 % may go lower.
+      const floor = g.preset === 'custom' && (g.resolutionScale || 1) < 1 ? 0.5 : Math.min(dpr, 1);
+      ratio = M.clamp(ratio, floor, 3);
+      this.pixelRatio = ratio;
+      this.renderer.setPixelRatio(ratio);
       this.renderer.setSize(w, h, false);
       this.renderer.domElement.style.width = w + 'px';
       this.renderer.domElement.style.height = h + 'px';
@@ -109,7 +125,12 @@
       SIM.events.emit('render:resize', { width: w, height: h });
     }
 
-    /** Frame time bookkeeping and automatic quality adaptation. */
+    /**
+     * Frame time bookkeeping and automatic quality adaptation (AUTO preset). When the frame rate is
+     * too low the governor first sheds the expensive effects that do not affect sharpness — shadow
+     * resolution, then draw distance — and only then lowers the render resolution, never below the
+     * screen's CSS pixel grid. When there is headroom again it restores them in reverse order.
+     */
     trackFrame(dt) {
       if (dt <= 0) return;
       this.fpsAvg = M.lerp(this.fpsAvg, 1 / dt, 0.05);
@@ -122,19 +143,32 @@
         return;
       }
       this.autoTimer += dt;
-      if (this.autoTimer < 2) return;
+      if (this.autoTimer < 2.5) return;
       this.autoTimer = 0;
-      let next = this.dynamicScale;
-      if (this.fpsAvg < 28) next = Math.max(0.55, this.dynamicScale - 0.1);
-      else if (this.fpsAvg > 55 && this.dynamicScale < 1) next = Math.min(1, this.dynamicScale + 0.05);
-      if (Math.abs(next - this.dynamicScale) > 0.001) {
-        this.dynamicScale = next;
-        this.resize();
-      }
-      // If even reduced resolution is not enough, drop the render distance too.
-      if (this.fpsAvg < 22 && this.dynamicScale <= 0.56 && g.renderDistance > 35) {
-        this.settings.set('graphics.renderDistance', Math.max(35, g.renderDistance - 15), { silent: true });
-        g.preset = 'auto';
+      const st = this.settings;
+      const setQuiet = (k, v) => {
+        st._applyingPreset = true;
+        st.set('graphics.' + k, v);
+        st._applyingPreset = false;
+      };
+      const SH = ['off', 'low', 'medium', 'high'];
+      if (!this.autoBase) this.autoBase = { shadows: g.shadows, renderDistance: g.renderDistance };
+      const base = this.autoBase;
+      const minScale = Math.min(1, Math.max(0.6, 1 / this.basePixelRatio()) + 0.05);
+      if (this.fpsAvg < 30) {
+        const si = SH.indexOf(g.shadows);
+        if (si > 0) setQuiet('shadows', SH[si - 1]);
+        else if (g.renderDistance > 45) setQuiet('renderDistance', Math.max(45, g.renderDistance - 15));
+        else if (this.dynamicScale > minScale) {
+          this.dynamicScale = Math.max(minScale, this.dynamicScale - 0.1);
+          this.resize();
+        }
+      } else if (this.fpsAvg > 56) {
+        if (this.dynamicScale < 1) {
+          this.dynamicScale = Math.min(1, this.dynamicScale + 0.05);
+          this.resize();
+        } else if (g.renderDistance < base.renderDistance) setQuiet('renderDistance', Math.min(base.renderDistance, g.renderDistance + 10));
+        else if (SH.indexOf(g.shadows) < SH.indexOf(base.shadows)) setQuiet('shadows', SH[SH.indexOf(g.shadows) + 1]);
       }
     }
 

@@ -160,20 +160,6 @@
       return this.flaps.pos;
     }
 
-    /** Interpolated aerodynamic flap increments for the current flap position. */
-    flapAero() {
-      const t = this.cfg.aero.flaps;
-      const deg = this.flaps.pos;
-      for (let i = 0; i < t.length - 1; i++) {
-        if (deg <= t[i + 1].deg) {
-          const f = M.invLerp(t[i].deg, t[i + 1].deg, deg);
-          return { cl: M.lerp(t[i].cl, t[i + 1].cl, f), cd: M.lerp(t[i].cd, t[i + 1].cd, f), clmax: M.lerp(t[i].clmax, t[i + 1].clmax, f) };
-        }
-      }
-      const l = t[t.length - 1];
-      return { cl: l.cl, cd: l.cd, clmax: l.clmax };
-    }
-
     flapLabel(index = this.flaps.handle) {
       const e = this.cfg.aero.flaps[index];
       return e.label || (e.deg === 0 ? 'UP' : e.deg + '°');
@@ -349,7 +335,8 @@
       const unusable = cfg.fuel.unusable;
       const lowPerTank = cfg.fuel.unit === 'kg' ? 450 : Math.max(2, this.fuelCapacity * 0.08);
 
-      w.stall = !ctx.onGround && ias > 20 * 0.514 && ctx.aoaDeg > ctx.stallAlphaDeg - cfg.stallHornMarginDeg;
+      // stall warning vane: triggers when the most critical wing section is within a few degrees of stall
+      w.stall = !ctx.onGround && ias > 20 * 0.514 && ctx.stallMarginDeg < cfg.stallHornMarginDeg;
       w.overspeed = ias / SIM.Units.KT > perf.vne;
       w.lowFuel = this.totalFuel - unusable < this.fuelCapacity * 0.12;
       const lTank = this.tanks.find((t) => t.id === 'L');
